@@ -1,0 +1,4 @@
+# Core Runtime Dependencies for Aegis Data Recovery
+PySide6>=6.5.0
+psutil>=5.9.0
+
