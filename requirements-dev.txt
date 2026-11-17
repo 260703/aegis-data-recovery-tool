@@ -1,5 +1,6 @@
 # Development, Linting & Testing Dependencies
 -r requirements.txt
+maturin>=1.5.0
 pytest>=7.0.0
 pytest-cov>=4.0.0
 black>=23.0.0

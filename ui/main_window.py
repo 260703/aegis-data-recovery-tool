@@ -22,14 +22,20 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QFileDialog, QProgressBar, QTableWidget, QTableWidgetItem,
     QHeaderView, QCheckBox, QFrame, QSplitter, QTextEdit, QScrollArea,
-    QLineEdit, QMessageBox, QAbstractItemView, QSizePolicy
+    QLineEdit, QMessageBox, QAbstractItemView, QSizePolicy, QMenu
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon, QPixmap, QColor
+import shutil
 
 from core.device_manager import DeviceManager, DeviceInfo
 from core.worker import RecoveryWorker
 from ui.styles import DARK_THEME_QSS
+
+try:
+    import aegis_core
+except ImportError:
+    aegis_core = None
 
 
 # Format badge color map
@@ -80,9 +86,14 @@ class MainWindow(QMainWindow):
         self._file_type_counts: Dict[str, int] = {}
         self._active_filter: str = "all"
 
-        self.setWindowTitle("Aegis Data Recovery v4.8-PRO")
+        self.setWindowTitle("Aegis Data Recovery v5.0-PRO")
         self.resize(1380, 860)
         self.setMinimumSize(1100, 720)
+
+        # Set application / window icon from aegis.ico
+        ico_path = Path(__file__).resolve().parent.parent / "aegis.ico"
+        if ico_path.exists():
+            self.setWindowIcon(QIcon(str(ico_path)))
 
         # Apply Global Dark Theme Stylesheet
         self.setStyleSheet(DARK_THEME_QSS)
@@ -98,6 +109,13 @@ class MainWindow(QMainWindow):
 
         # Initial device enumeration
         self.refresh_devices()
+
+        # Log active engine capabilities
+        if aegis_core is not None:
+            self._log("⚡ Native Rust acceleration active: Hardware AVX2/SIMD pattern matching & Rayon multi-threading.", "success")
+        else:
+            self._log("⚠️ Native Rust engine (aegis_core) not detected. Running in Pure Python fallback mode.", "warning")
+            self._log("💡 Tip: For up to 50x faster carving, download the pre-compiled .exe from GitHub Releases or build with 'maturin develop --release'.", "info")
 
         # Start periodic USB hotplug detection timer (checks every 2.5s without blocking UI)
         self.hotplug_timer = QTimer(self)
@@ -130,17 +148,26 @@ class MainWindow(QMainWindow):
         header_bar.setContentsMargins(14, 0, 14, 0)
         header_bar.setSpacing(10)
 
-        # App icon
-        icon_label = QLabel("🛡")
-        icon_label.setStyleSheet("font-size: 13pt; border: none;")
-        header_bar.addWidget(icon_label)
+        # App icon / logo
+        ico_path = Path(__file__).resolve().parent.parent / "aegis.ico"
+        if ico_path.exists():
+            icon_label = QLabel()
+            pixmap = QIcon(str(ico_path)).pixmap(24, 24)
+            icon_label.setPixmap(pixmap)
+            icon_label.setFixedSize(pixmap.width(), 24)
+            icon_label.setStyleSheet("border: none; background: transparent;")
+            header_bar.addWidget(icon_label)
+        else:
+            icon_label = QLabel("🛡")
+            icon_label.setStyleSheet("font-size: 13pt; border: none;")
+            header_bar.addWidget(icon_label)
 
         # Title + version badge (single row, compact)
         app_title = QLabel("AEGIS DATA RECOVERY")
         app_title.setStyleSheet("font-size: 11pt; font-weight: 700; color: #e0e4ec; letter-spacing: 0.5px;")
         header_bar.addWidget(app_title)
 
-        version_badge = QLabel("v4.8-PRO")
+        version_badge = QLabel("v5.0-PRO")
         version_badge.setStyleSheet(
             "background-color: #0d3b2e; color: #2dd4a8; border: 1px solid #156b52; "
             "border-radius: 3px; padding: 1px 5px; font-size: 7.5pt; font-weight: 700;"
@@ -196,30 +223,60 @@ class MainWindow(QMainWindow):
 
         # ----- LEFT SIDEBAR -----
         left_panel = QFrame()
-        left_panel.setFixedWidth(350)
+        left_panel.setFixedWidth(380)
         left_panel.setStyleSheet(
-            "QFrame { background-color: #0f1520; border-right: 1px solid #1a2230; "
+            "QFrame#left_panel { background-color: #0f1520; border-right: 1px solid #1a2230; "
             "border-top: none; border-left: none; border-bottom: none; border-radius: 0; }"
         )
+        left_panel.setObjectName("left_panel")
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(14, 12, 14, 12)
-        left_layout.setSpacing(10)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+
+        # Scroll Area for configuration sections (1 through 4)
+        # Prevents any content cropping across different screen heights/DPIs
+        self.left_scroll = QScrollArea()
+        self.left_scroll.setWidgetResizable(True)
+        self.left_scroll.setFrameShape(QFrame.NoFrame)
+        self.left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.left_scroll.setStyleSheet(
+            "QScrollArea { background-color: transparent; border: none; } "
+            "QScrollBar:vertical { width: 6px; background: #0c1119; border: none; } "
+            "QScrollBar::handle:vertical { background: #1e2d40; border-radius: 3px; min-height: 20px; } "
+            "QScrollBar::handle:vertical:hover { background: #2a4a6e; } "
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+        )
+
+        self.scroll_content = QWidget()
+        self.scroll_content.setStyleSheet("background-color: transparent;")
+        self.scroll_content.setFixedWidth(378)
+        scroll_layout = QVBoxLayout(self.scroll_content)
+        scroll_layout.setContentsMargins(16, 14, 16, 14)
+        scroll_layout.setSpacing(12)
 
         # --- 1. RECOVERY TARGET ---
-        self._add_section_header(left_layout, "1", "SELECT RECOVERY TARGET", online=True)
+        self._add_section_header(scroll_layout, "1", "SELECT RECOVERY TARGET", online=True)
 
         self.combo_devices = QComboBox()
         self.combo_devices.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.combo_devices.setFixedHeight(34)
         self.combo_devices.setStyleSheet("font-size: 9pt; padding: 4px 8px;")
-        self.combo_devices.view().setFixedWidth(320)
-        self.combo_devices.view().setTextElideMode(Qt.ElideRight)
+        self.combo_devices.view().setFixedWidth(346)
+        self.combo_devices.view().setTextElideMode(Qt.ElideMiddle)
         self.combo_devices.currentIndexChanged.connect(self._on_device_selected)
-        left_layout.addWidget(self.combo_devices)
+        scroll_layout.addWidget(self.combo_devices)
 
-        self.btn_browse_image = QPushButton("📁 Load Disk Image (.dd / .img / .raw)")
-        self.btn_browse_image.setStyleSheet("font-size: 9pt; padding: 5px 10px;")
+        self.btn_browse_image = QPushButton("📁  Load Disk Image (.dd, .img, .raw, .vhd)")
+        self.btn_browse_image.setFixedHeight(32)
+        self.btn_browse_image.setStyleSheet(
+            "QPushButton { font-size: 8.5pt; font-weight: 500; background-color: #141c28; "
+            "color: #c8ccd4; border: 1px solid #1e2d40; border-radius: 5px; padding: 4px 10px; } "
+            "QPushButton:hover { background-color: #1a2a3e; border-color: #2a4a6e; color: #ffffff; }"
+        )
+        self.btn_browse_image.setToolTip("Mount a forensic raw disk image dump file for recovery")
         self.btn_browse_image.clicked.connect(self._browse_disk_image)
-        left_layout.addWidget(self.btn_browse_image)
+        scroll_layout.addWidget(self.btn_browse_image)
 
         # Device info box (clean styling, distinct row layout)
         self.frame_device_info = QFrame()
@@ -228,35 +285,50 @@ class MainWindow(QMainWindow):
         )
         info_layout = QVBoxLayout(self.frame_device_info)
         info_layout.setSpacing(6)
-        info_layout.setContentsMargins(10, 8, 10, 8)
+        info_layout.setContentsMargins(12, 8, 12, 8)
 
         self.lbl_info_sector = self._make_info_row(info_layout, "Logical Sector Size:", "512 Bytes")
         self.lbl_info_sectors = self._make_info_row(info_layout, "Total Sectors (LBA):", "-")
         self.lbl_info_write_mode = self._make_write_mode_row(info_layout)
-        left_layout.addWidget(self.frame_device_info)
+        scroll_layout.addWidget(self.frame_device_info)
 
         # --- 2. OUTPUT DIRECTORY ---
-        self._add_section_header(left_layout, "2", "OUTPUT RECOVERY DIRECTORY")
+        self._add_section_header(scroll_layout, "2", "OUTPUT RECOVERY DIRECTORY")
 
         out_box = QHBoxLayout()
-        out_box.setSpacing(6)
+        out_box.setContentsMargins(0, 0, 0, 0)
+        out_box.setSpacing(8)
+
         self.edit_output = QLineEdit()
+        self.edit_output.setFixedHeight(32)
+        self.edit_output.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         desktop_path = Path.home() / "Desktop"
         default_out = str((desktop_path if desktop_path.exists() else Path.home()) / "Aegis_Recovered_Data")
         self.edit_output.setText(default_out)
+        self.edit_output.setPlaceholderText("Select output destination folder...")
+        self.edit_output.setToolTip("Folder where recovered files are saved (must NOT be on target drive)")
         self.edit_output.textChanged.connect(self._validate_output_safety)
 
-        self.btn_browse_out = QPushButton("Browse...")
-        self.btn_browse_out.setFixedWidth(80)
+        self.btn_browse_out = QPushButton("📁 Browse...")
+        self.btn_browse_out.setFixedHeight(32)
+        self.btn_browse_out.setFixedWidth(85)
+        self.btn_browse_out.setStyleSheet(
+            "QPushButton { background-color: #141c28; color: #4d9cf0; border: 1px solid #2a4a6e; "
+            "border-radius: 5px; font-size: 8.5pt; font-weight: 600; padding: 0 6px; } "
+            "QPushButton:hover { background-color: #1a2a3e; border-color: #4d9cf0; color: #ffffff; }"
+        )
+        self.btn_browse_out.setToolTip("Select destination folder on a separate drive")
         self.btn_browse_out.clicked.connect(self._browse_output_dir)
+
         out_box.addWidget(self.edit_output)
         out_box.addWidget(self.btn_browse_out)
-        left_layout.addLayout(out_box)
+        scroll_layout.addLayout(out_box)
 
         # Safety Warning Label
         self.lbl_safety_status = QLabel("✓  Separate drive selected (Read-Only Safety Guaranteed)")
         self.lbl_safety_status.setProperty("class", "safety-ok")
-        left_layout.addWidget(self.lbl_safety_status)
+        self.lbl_safety_status.setWordWrap(True)
+        scroll_layout.addWidget(self.lbl_safety_status)
 
         # --- 3. FILE FORMATS TO CARVE ---
         fmt_header = QHBoxLayout()
@@ -275,7 +347,7 @@ class MainWindow(QMainWindow):
             "border-radius: 3px; padding: 1px 6px; font-size: 7.5pt; font-weight: 700;"
         )
         fmt_header.addWidget(self.lbl_selected_count)
-        left_layout.addLayout(fmt_header)
+        scroll_layout.addLayout(fmt_header)
 
         # Filter tabs for format checkboxes (compact pills that never clip)
         filter_tabs = QHBoxLayout()
@@ -300,13 +372,13 @@ class MainWindow(QMainWindow):
         filter_tabs.addWidget(self.btn_photos_only)
         filter_tabs.addWidget(self.btn_videos_only)
         filter_tabs.addStretch()
-        left_layout.addLayout(filter_tabs)
+        scroll_layout.addLayout(filter_tabs)
 
         fmt_box = QVBoxLayout()
-        fmt_box.setSpacing(5)
+        fmt_box.setSpacing(6)
         self.chk_jpeg = QCheckBox("JPEG Images   (.jpg, .jpeg)")
         self.chk_png = QCheckBox("PNG Images    (.png)")
-        self.chk_raw = QCheckBox("RAW Photos    (.cr2, .cr3, .nef)")
+        self.chk_raw = QCheckBox("RAW Photos    (.cr2, .cr3, .nef, .arw)")
         self.chk_mp4 = QCheckBox("MP4 Videos    (.mp4)")
         self.chk_mov = QCheckBox("QuickTime      (.mov)")
 
@@ -315,43 +387,63 @@ class MainWindow(QMainWindow):
             chk.setChecked(True)
             chk.stateChanged.connect(self._update_format_count)
             fmt_box.addWidget(chk)
-        left_layout.addLayout(fmt_box)
+        scroll_layout.addLayout(fmt_box)
 
         # --- 4. SECTOR ALIGNMENT ---
-        self._add_section_header(left_layout, "4", "SECTOR ALIGNMENT")
+        self._add_section_header(scroll_layout, "4", "SECTOR ALIGNMENT")
 
         self.combo_align = QComboBox()
         self.combo_align.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.combo_align.view().setFixedWidth(320)
+        self.combo_align.setFixedHeight(34)
+        self.combo_align.view().setFixedWidth(346)
         self.combo_align.view().setTextElideMode(Qt.ElideRight)
         self.combo_align.addItem("512-Byte Sector (Fast, Standard FAT/exFAT)", 512)
         self.combo_align.addItem("4096-Byte Cluster (Ultra-Fast NTFS)", 4096)
         self.combo_align.addItem("1-Byte Unaligned (Forensic Byte Carve)", 1)
-        left_layout.addWidget(self.combo_align)
+        scroll_layout.addWidget(self.combo_align)
 
-        left_layout.addStretch()
+        scroll_layout.addStretch()
+        self.left_scroll.setWidget(self.scroll_content)
+        left_layout.addWidget(self.left_scroll, stretch=1)
 
-        # --- ACTION BUTTONS (Bottom of sidebar) ---
+        # --- ACTION BUTTONS (Pinned at bottom of sidebar, never hidden) ---
+        action_footer = QFrame()
+        action_footer.setStyleSheet(
+            "QFrame { background-color: #0b0f17; border-top: 1px solid #1a2230; "
+            "border-bottom: none; border-left: none; border-right: none; }"
+        )
+        footer_layout = QVBoxLayout(action_footer)
+        footer_layout.setContentsMargins(16, 12, 16, 14)
+        footer_layout.setSpacing(8)
+
         self.btn_start = QPushButton("▶  START RECOVERY SCAN")
         self.btn_start.setProperty("class", "btn-primary")
+        self.btn_start.setFixedHeight(44)
+        self.btn_start.setCursor(Qt.PointingHandCursor)
         self.btn_start.clicked.connect(self._start_scan)
-        left_layout.addWidget(self.btn_start)
+        footer_layout.addWidget(self.btn_start)
 
         btn_action_sub = QHBoxLayout()
         btn_action_sub.setSpacing(8)
         self.btn_pause = QPushButton("⏸  Pause")
         self.btn_pause.setProperty("class", "btn-pause")
+        self.btn_pause.setFixedHeight(34)
+        self.btn_pause.setCursor(Qt.PointingHandCursor)
         self.btn_pause.setEnabled(False)
         self.btn_pause.clicked.connect(self._toggle_pause)
 
         self.btn_stop = QPushButton("⏹  Stop")
         self.btn_stop.setProperty("class", "btn-danger")
+        self.btn_stop.setFixedHeight(34)
+        self.btn_stop.setCursor(Qt.PointingHandCursor)
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_scan)
 
         btn_action_sub.addWidget(self.btn_pause)
         btn_action_sub.addWidget(self.btn_stop)
-        left_layout.addLayout(btn_action_sub)
+        footer_layout.addLayout(btn_action_sub)
+
+        left_layout.addWidget(action_footer)
 
         content_layout.addWidget(left_panel)
 
@@ -439,8 +531,14 @@ class MainWindow(QMainWindow):
         self.lbl_elapsed = QLabel("Elapsed: 00:00:00")
         self.lbl_elapsed.setProperty("class", "metric-sub")
         eta_inner.addWidget(self.lbl_elapsed)
-        self.lbl_engine_info = QLabel("Engine: Multi-thread L1-Cache")
-        self.lbl_engine_info.setProperty("class", "metric-sub")
+        if aegis_core is not None:
+            self.lbl_engine_info = QLabel("Engine: ⚡ Native Rust (SIMD + Rayon)")
+            self.lbl_engine_info.setStyleSheet("color: #2dd4a8; font-size: 8pt; font-weight: 600;")
+            self.lbl_engine_info.setToolTip("Hardware-accelerated AVX2/SIMD scanning & Rayon multi-threading active")
+        else:
+            self.lbl_engine_info = QLabel("Engine: ⚠️ Pure Python (Fallback Mode)")
+            self.lbl_engine_info.setStyleSheet("color: #e8a65a; font-size: 8pt; font-weight: 600;")
+            self.lbl_engine_info.setToolTip("Running in interpreted Python fallback mode. Build with maturin or download .exe for 50x speed.")
         eta_inner.addWidget(self.lbl_engine_info)
         metrics_bar.addWidget(self.card_eta)
 
@@ -522,14 +620,91 @@ class MainWindow(QMainWindow):
 
         table_header_row.addStretch()
 
+        # Selection buttons: Select All / Deselect All
+        self.btn_select_all = QPushButton("☑ Select All")
+        self.btn_select_all.setFixedHeight(28)
+        self.btn_select_all.setCursor(Qt.PointingHandCursor)
+        self.btn_select_all.setStyleSheet("""
+            QPushButton {
+                background-color: #141c28;
+                color: #8b99ac;
+                border: 1px solid #1e2d40;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 8pt;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #1a2a3e;
+                color: #e0e4ec;
+                border-color: #2a3a50;
+            }
+        """)
+        self.btn_select_all.clicked.connect(self._select_all_files)
+        table_header_row.addWidget(self.btn_select_all)
+
+        self.btn_deselect_all = QPushButton("☐ Deselect All")
+        self.btn_deselect_all.setFixedHeight(28)
+        self.btn_deselect_all.setCursor(Qt.PointingHandCursor)
+        self.btn_deselect_all.setStyleSheet("""
+            QPushButton {
+                background-color: #141c28;
+                color: #8b99ac;
+                border: 1px solid #1e2d40;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 8pt;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #1a2a3e;
+                color: #e0e4ec;
+                border-color: #2a3a50;
+            }
+        """)
+        self.btn_deselect_all.clicked.connect(self._deselect_all_files)
+        table_header_row.addWidget(self.btn_deselect_all)
+
         # Search filter
         self.edit_search = QLineEdit()
-        self.edit_search.setPlaceholderText("🔍 Filter files by name, ext, offs...")
-        self.edit_search.setMaximumWidth(240)
+        self.edit_search.setPlaceholderText("🔍 Filter files...")
+        self.edit_search.setMaximumWidth(180)
+        self.edit_search.setFixedHeight(28)
         self.edit_search.textChanged.connect(self._filter_table)
         table_header_row.addWidget(self.edit_search)
 
-        btn_open_out_folder = QPushButton("📂 Open Output Folder")
+        # Save Selected button (prominent emerald accent)
+        self.btn_save_selected = QPushButton("💾 Save Selected (0)")
+        self.btn_save_selected.setFixedHeight(28)
+        self.btn_save_selected.setCursor(Qt.PointingHandCursor)
+        self.btn_save_selected.setEnabled(False)
+        self.btn_save_selected.setStyleSheet("""
+            QPushButton {
+                background-color: #0d3b2e;
+                color: #2dd4a8;
+                border: 1px solid #156b52;
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-weight: 700;
+                font-size: 8.5pt;
+            }
+            QPushButton:hover {
+                background-color: #156b52;
+                color: #ffffff;
+            }
+            QPushButton:disabled {
+                background-color: #0c1119;
+                color: #3d4a5c;
+                border: 1px solid #1a2230;
+            }
+        """)
+        self.btn_save_selected.clicked.connect(lambda: self._save_selected_files(show_dialog=True))
+        table_header_row.addWidget(self.btn_save_selected)
+
+        # Open Output Folder
+        btn_open_out_folder = QPushButton("📂 Open Folder")
+        btn_open_out_folder.setFixedHeight(28)
+        btn_open_out_folder.setCursor(Qt.PointingHandCursor)
         btn_open_out_folder.clicked.connect(self._open_output_folder)
         table_header_row.addWidget(btn_open_out_folder)
 
@@ -540,7 +715,7 @@ class MainWindow(QMainWindow):
         self.table_files.setColumnCount(7)
         self.table_files.setHorizontalHeaderLabels([
             "FILE NAME", "FORMAT", "SIZE", "SECTOR OFFSET / LBA",
-            "INTEGRITY DETAILS", "ACTION", ""
+            "INTEGRITY DETAILS", "SELECT", ""
         ])
         header = self.table_files.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -552,10 +727,14 @@ class MainWindow(QMainWindow):
         header.resizeSection(3, 170)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
         header.setSectionResizeMode(5, QHeaderView.Fixed)
-        header.resizeSection(5, 70)
+        header.resizeSection(5, 75)
         header.setSectionResizeMode(6, QHeaderView.Fixed)
         header.resizeSection(6, 60)
         self.table_files.setColumnHidden(6, True)  # Hidden helper column
+
+        header.sectionClicked.connect(self._on_header_section_clicked)
+        self.table_files.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table_files.customContextMenuRequested.connect(self._on_table_context_menu)
 
         self.table_files.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_files.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -637,13 +816,14 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         lbl = QLabel(label)
-        lbl.setStyleSheet("font-size: 8pt; color: #5a6578; border: none; background: transparent;")
-        lbl.setMinimumWidth(110)
+        lbl.setStyleSheet("font-size: 8.5pt; color: #5a6578; border: none; background: transparent;")
+        lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         row.addWidget(lbl)
         row.addStretch()
         val = QLabel(value)
-        val.setStyleSheet("font-size: 8pt; color: #8892a4; font-weight: 600; border: none; background: transparent;")
+        val.setStyleSheet("font-size: 8.5pt; color: #c8ccd4; font-weight: 600; border: none; background: transparent;")
         val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        val.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         row.addWidget(val)
         parent_layout.addLayout(row)
         return val
@@ -653,16 +833,16 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         lbl = QLabel("Write-Block Mode:")
-        lbl.setStyleSheet("font-size: 8pt; color: #5a6578; border: none; background: transparent;")
-        lbl.setMinimumWidth(110)
+        lbl.setStyleSheet("font-size: 8.5pt; color: #5a6578; border: none; background: transparent;")
+        lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         row.addWidget(lbl)
         row.addStretch()
-        badge = QLabel("RO ENFORCED")
+        badge = QLabel("● Hardware Read-Only")
         badge.setStyleSheet(
             "background-color: #0d3b2e; color: #2dd4a8; border: 1px solid #156b52; "
-            "border-radius: 3px; padding: 1px 6px; font-size: 7.5pt; font-weight: 700;"
+            "border-radius: 3px; padding: 1px 7px; font-size: 8pt; font-weight: 700;"
         )
-        badge.setFixedHeight(18)
+        badge.setFixedHeight(20)
         badge.setAlignment(Qt.AlignCenter)
         row.addWidget(badge)
         parent_layout.addLayout(row)
@@ -929,6 +1109,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Formats", "Select at least one file format to recover.")
             return
 
+        # Check if running in Python fallback mode and prompt the user
+        if aegis_core is None and not getattr(self, "_warned_python_fallback", False):
+            self._warned_python_fallback = True
+            reply = QMessageBox.warning(
+                self,
+                "Native Rust Engine Not Detected",
+                "⚠️ Running in Pure Python Fallback Mode\n\n"
+                "The compiled Rust extension ('aegis_core') was not detected in this environment.\n\n"
+                "• The recovery scan will proceed using the built-in Python fallback engine.\n"
+                "• For up to 50x faster carving and full multi-core saturation, "
+                "please download the standalone pre-compiled executable from GitHub Releases "
+                "or compile the Rust crate using:\n\n"
+                "    maturin develop --release\n\n"
+                "Would you like to proceed with the Python engine?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
         align_step = self.combo_align.currentData()
 
         # Reset UI state
@@ -937,6 +1136,7 @@ class MainWindow(QMainWindow):
         self._file_type_counts = {}
         self.table_files.setRowCount(0)
         self.recovered_files.clear()
+        self._update_selected_count()
         self.lbl_progress_pct.setText("0.0%")
         self.lbl_progress_val.setText("0.0 / 0.0 GB")
         self.lbl_progress_lba.setText("LBA: 0")
@@ -963,10 +1163,20 @@ class MainWindow(QMainWindow):
             f"Scanning · Signatures Active: {sig_count} · Write-block hardware check: PASSED"
         )
 
-        # Launch QThread Background Worker
+        # Initialize output and staging directories
+        self._user_output_dir = os.path.abspath(out_dir)
+        self._staging_dir = os.path.join(self._user_output_dir, ".aegis_staging")
+        os.makedirs(self._staging_dir, exist_ok=True)
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetFileAttributesW(self._staging_dir, 2)  # FILE_ATTRIBUTE_HIDDEN
+        except Exception:
+            pass
+
+        # Launch QThread Background Worker with staging directory
         self.worker = RecoveryWorker(
             target_path=target_path,
-            output_dir=out_dir,
+            output_dir=self._staging_dir,
             sector_step=align_step,
             block_size_mb=16,
             enabled_formats=enabled_formats,
@@ -1117,23 +1327,26 @@ class MainWindow(QMainWindow):
         self.table_files.setItem(row, 3, item_off)
         self.table_files.setItem(row, 4, item_details)
 
-        # Action buttons: Preview + Export
-        action_widget = QWidget()
-        action_layout = QHBoxLayout(action_widget)
-        action_layout.setContentsMargins(2, 2, 2, 2)
-        action_layout.setSpacing(4)
+        # Select Checkbox (Save to desired output folder)
+        chk_widget = QWidget()
+        chk_layout = QHBoxLayout(chk_widget)
+        chk_layout.setContentsMargins(0, 0, 0, 0)
+        chk_layout.setAlignment(Qt.AlignCenter)
 
-        btn_preview = QPushButton("Preview")
-        btn_preview.setProperty("class", "btn-table-action")
-        btn_preview.clicked.connect(lambda _, p=meta["path"]: self._open_file(p))
+        chk = QCheckBox()
+        chk.setChecked(True)
+        chk.setCursor(Qt.PointingHandCursor)
+        chk.setToolTip("Select to save this file to destination output directory")
+        chk.stateChanged.connect(self._update_selected_count)
 
-        btn_export = QPushButton("Export")
-        btn_export.setProperty("class", "btn-table-action")
-        btn_export.clicked.connect(lambda _, p=meta["path"]: self._export_single_file(p))
+        chk_layout.addWidget(chk)
+        self.table_files.setCellWidget(row, 5, chk_widget)
 
-        action_layout.addWidget(btn_preview)
-        action_layout.addWidget(btn_export)
-        self.table_files.setCellWidget(row, 5, action_widget)
+        meta["checkbox"] = chk
+        meta["staging_path"] = meta.get("path", "")
+        meta["saved"] = False
+
+        self._update_selected_count()
 
         # Apply active filters
         self._apply_row_filter(row, meta)
@@ -1165,15 +1378,25 @@ class MainWindow(QMainWindow):
         m, s = divmod(rem, 60)
         self.lbl_elapsed.setText(f"Elapsed: {h:02d}:{m:02d}:{s:02d}")
 
+        # Automatically sync currently selected files to user's desired output directory
+        self._save_selected_files(show_dialog=False)
+
+        selected_count = sum(
+            1 for m in self.recovered_files
+            if m.get("checkbox") and m["checkbox"].isChecked()
+        )
+
         if self._scan_aborted:
             self.lbl_scan_state.setText("STOPPED")
-            self.lbl_ticker_text.setText("Scan stopped by user · Files recovered before stop are preserved")
+            self.lbl_ticker_text.setText("Scan stopped by user · Selected files are saved")
             QMessageBox.information(
                 self,
                 "Scan Stopped",
                 f"Recovery scan was stopped after {elapsed:.1f} seconds.\n\n"
-                f"Files recovered before stop: {total_found}\n"
-                f"Saved to: {self.edit_output.text()}"
+                f"Files detected before stop: {total_found}\n"
+                f"Selected & saved to output folder: {selected_count}\n"
+                f"Saved to: {self._user_output_dir}\n\n"
+                f"Tip: You can select or deselect files in the table and click 'Save Selected' at any time."
             )
             return
 
@@ -1189,13 +1412,15 @@ class MainWindow(QMainWindow):
             self,
             "Recovery Complete",
             f"Recovery scan finished in {elapsed:.1f} seconds.\n\n"
-            f"Total files recovered: {total_found}\n"
-            f"• JPEG: {stats['found']['jpeg']}\n"
-            f"• PNG: {stats['found']['png']}\n"
-            f"• RAW: {stats['found']['raw']}\n"
-            f"• MP4: {stats['found']['mp4']}\n"
-            f"• MOV: {stats['found']['mov']}\n\n"
-            f"Saved to: {self.edit_output.text()}"
+            f"Total files detected: {total_found}\n"
+            f"Selected & saved to output folder: {selected_count}\n"
+            f"• JPEG: {stats['found'].get('jpeg', 0)}\n"
+            f"• PNG: {stats['found'].get('png', 0)}\n"
+            f"• RAW: {stats['found'].get('raw', 0)}\n"
+            f"• MP4: {stats['found'].get('mp4', 0)}\n"
+            f"• MOV: {stats['found'].get('mov', 0)}\n\n"
+            f"Saved to: {self._user_output_dir}\n\n"
+            f"Tip: You can check or uncheck files in the table and click 'Save Selected' to update your saved files anytime."
         )
 
     def _on_scan_error(self, err_msg: str):
@@ -1263,11 +1488,163 @@ class MainWindow(QMainWindow):
                 visible = visible and text_match
             self.table_files.setRowHidden(row, not visible)
 
+    def _on_header_section_clicked(self, logical_index: int):
+        if logical_index == 5:  # SELECT column
+            all_selected = all(
+                m.get("checkbox") and m["checkbox"].isChecked()
+                for m in self.recovered_files
+            ) if self.recovered_files else False
+            if all_selected:
+                self._deselect_all_files()
+            else:
+                self._select_all_files()
+
+    def _update_selected_count(self):
+        selected_count = sum(
+            1 for m in self.recovered_files
+            if m.get("checkbox") and m["checkbox"].isChecked()
+        )
+        if hasattr(self, "btn_save_selected"):
+            self.btn_save_selected.setText(f"💾 Save Selected ({selected_count})")
+            self.btn_save_selected.setEnabled(selected_count > 0)
+
+    def _select_all_files(self):
+        """Checks select boxes for all files."""
+        for meta in self.recovered_files:
+            chk = meta.get("checkbox")
+            if chk:
+                chk.blockSignals(True)
+                chk.setChecked(True)
+                chk.blockSignals(False)
+        self._update_selected_count()
+
+    def _deselect_all_files(self):
+        """Unchecks select boxes for all files."""
+        for meta in self.recovered_files:
+            chk = meta.get("checkbox")
+            if chk:
+                chk.blockSignals(True)
+                chk.setChecked(False)
+                chk.blockSignals(False)
+        self._update_selected_count()
+
+    def _save_selected_files(self, show_dialog: bool = True):
+        """
+        Saves only the files that are currently selected (checked) to the user's chosen output directory.
+        Unselected files are excluded and removed from the output folder.
+        """
+        user_out = getattr(self, "_user_output_dir", None) or self.edit_output.text().strip()
+        if not user_out:
+            if show_dialog:
+                QMessageBox.warning(self, "Output Directory Missing", "Please select a valid output directory first.")
+            return
+
+        os.makedirs(user_out, exist_ok=True)
+        saved_count = 0
+        removed_count = 0
+        saved_bytes = 0
+
+        for meta in self.recovered_files:
+            chk = meta.get("checkbox")
+            is_checked = chk.isChecked() if chk else False
+            staging_path = meta.get("staging_path", "")
+
+            if not staging_path or not os.path.exists(staging_path):
+                continue
+
+            staging_dir = getattr(self, "_staging_dir", None)
+            if staging_dir and os.path.exists(staging_dir):
+                try:
+                    rel_path = os.path.relpath(staging_path, staging_dir)
+                except Exception:
+                    rel_path = os.path.basename(staging_path)
+            else:
+                rel_path = os.path.basename(staging_path)
+
+            dest_path = os.path.join(user_out, rel_path)
+
+            if is_checked:
+                try:
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    if not os.path.exists(dest_path) or os.path.abspath(staging_path) != os.path.abspath(dest_path):
+                        shutil.copy2(staging_path, dest_path)
+                    meta["path"] = dest_path
+                    meta["saved"] = True
+                    saved_count += 1
+                    saved_bytes += meta.get("size", 0)
+                except Exception as e:
+                    self._log(f"Error saving {meta.get('name', 'file')}: {e}", "error")
+            else:
+                # If file was unselected, remove it from the destination folder if it was previously saved
+                if os.path.exists(dest_path) and os.path.abspath(staging_path) != os.path.abspath(dest_path):
+                    try:
+                        os.remove(dest_path)
+                        removed_count += 1
+                    except Exception:
+                        pass
+                meta["path"] = staging_path
+                meta["saved"] = False
+
+        if saved_count > 0 or show_dialog:
+            size_mb = saved_bytes / (1024 * 1024)
+            self._log(f"Output sync complete: {saved_count} selected files ({size_mb:.2f} MB) saved to {user_out}", "success")
+        if show_dialog:
+            msg = f"Successfully saved {saved_count} selected file(s) to:\n{user_out}"
+            if removed_count > 0:
+                msg += f"\n\n({removed_count} unselected file(s) removed from output directory)"
+            QMessageBox.information(self, "Files Saved", msg)
+
+    def _on_table_context_menu(self, pos):
+        """Right-click context menu for table rows."""
+        row = self.table_files.rowAt(pos.y())
+        if 0 <= row < len(self.recovered_files):
+            meta = self.recovered_files[row]
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #0c1119;
+                    color: #c8ccd4;
+                    border: 1px solid #1e2d40;
+                    padding: 4px;
+                    border-radius: 4px;
+                }
+                QMenu::item {
+                    padding: 6px 20px;
+                    border-radius: 3px;
+                }
+                QMenu::item:selected {
+                    background-color: #1a2a3e;
+                    color: #2dd4a8;
+                }
+            """)
+            action_preview = menu.addAction("👁  Preview File")
+            action_toggle = menu.addAction("☑  Toggle Select / Save")
+            menu.addSeparator()
+            action_export = menu.addAction("💾  Export Single File...")
+            action_open_loc = menu.addAction("📂  Open File Location")
+
+            chosen = menu.exec(self.table_files.viewport().mapToGlobal(pos))
+            p = meta.get("path") or meta.get("staging_path")
+            if chosen == action_preview and p and os.path.exists(p):
+                self._open_file(p)
+            elif chosen == action_toggle:
+                chk = meta.get("checkbox")
+                if chk:
+                    chk.setChecked(not chk.isChecked())
+            elif chosen == action_export and p and os.path.exists(p):
+                self._export_single_file(p)
+            elif chosen == action_open_loc and p and os.path.exists(p):
+                folder = os.path.dirname(p)
+                if os.path.exists(folder):
+                    os.startfile(folder)
+
     def _on_table_double_click(self, index):
         row = index.row()
-        item = self.table_files.item(row, 0)
-        if item:
-            self._open_file(item.toolTip())
+        if 0 <= row < len(self.recovered_files):
+            meta = self.recovered_files[row]
+            p = meta.get("path") or meta.get("staging_path")
+            if p and os.path.exists(p):
+                self._open_file(p)
 
     def _open_file(self, path: str):
         if os.path.exists(path):
@@ -1282,7 +1659,6 @@ class MainWindow(QMainWindow):
                 self, "Export Recovered File", os.path.basename(path)
             )
             if dest:
-                import shutil
                 shutil.copy2(path, dest)
                 self._log(f"Exported: {os.path.basename(path)} → {dest}", "success")
 
@@ -1297,7 +1673,7 @@ class MainWindow(QMainWindow):
             self._log(f"Log exported to: {dest}", "info")
 
     def _open_output_folder(self):
-        folder = self.edit_output.text().strip()
+        folder = getattr(self, "_user_output_dir", None) or self.edit_output.text().strip()
         if os.path.exists(folder):
             if sys.platform == "win32":
                 os.startfile(folder)
@@ -1321,6 +1697,22 @@ class MainWindow(QMainWindow):
             self._scan_aborted = True
             self.worker.stop()
             self.worker.wait(5000)
+
+        # Sync selected files before exit
+        if self.recovered_files and hasattr(self, "_user_output_dir"):
+            try:
+                self._save_selected_files(show_dialog=False)
+            except Exception:
+                pass
+
+        # Cleanup staging cache
+        staging_dir = getattr(self, "_staging_dir", None)
+        if staging_dir and os.path.exists(staging_dir):
+            try:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            except Exception:
+                pass
+
         self.hotplug_timer.stop()
         self._elapsed_timer.stop()
         event.accept()

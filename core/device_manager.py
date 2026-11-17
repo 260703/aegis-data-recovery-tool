@@ -2,8 +2,8 @@
 Device Detection & Drive Manager
 ================================
 Detects physical disk drives (\\\\.\\PhysicalDriveX), removable USB drives, and partitions.
-Prioritizes raw physical drives for forensic-level carving.
-Provides safety checks to ensure output directories are never placed on the drive being recovered.
+Integrates with the high-performance compiled Rust engine (`aegis_core`) for direct Win32
+physical hardware enumeration and target overwrite safety checks.
 """
 
 import os
@@ -14,6 +14,11 @@ import json
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import psutil
+
+try:
+    import aegis_core
+except ImportError:
+    aegis_core = None
 
 # Windows Drive Types
 DRIVE_UNKNOWN = 0
@@ -54,10 +59,30 @@ class DeviceManager:
         Returns all detectable storage drives.
         Prioritizes raw physical drives (\\\\.\\PhysicalDriveX) and removable USB media.
         """
+        if aegis_core is not None:
+            try:
+                raw_devices = aegis_core.list_devices()
+                return [
+                    DeviceInfo(
+                        device_path=d["device_path"],
+                        display_name=d["display_name"],
+                        drive_type=d["drive_type"],
+                        total_bytes=d["total_bytes"],
+                        free_bytes=d["free_bytes"],
+                        filesystem=d["filesystem"],
+                        is_removable=d["is_removable"],
+                        mountpoint=d.get("mountpoint", ""),
+                        model=d.get("model", "")
+                    )
+                    for d in raw_devices
+                ]
+            except Exception:
+                pass
+
+        # Fallback Python enumeration if aegis_core is not loaded
         devices: List[DeviceInfo] = []
         seen_paths = set()
 
-        # 1. On Windows, enumerate physical drives via Win32_DiskDrive
         if self.is_windows:
             phys_drives = self._get_windows_physical_drives()
             for pd in phys_drives:
@@ -87,14 +112,11 @@ class DeviceManager:
                 ))
                 seen_paths.add(dev_id.upper())
 
-        # 2. Enumerate logical partitions (e.g. E:\)
         try:
             partitions = psutil.disk_partitions(all=True)
             for p in partitions:
-                device_path = p.device
                 mountpoint = p.mountpoint
                 fstype = p.fstype or "RAW"
-
                 total_bytes = 0
                 free_bytes = 0
                 try:
@@ -121,19 +143,10 @@ class DeviceManager:
                             type_desc = "Local Volume"
                     except Exception:
                         pass
-                else:
-                    if "/media/" in mountpoint or "/mnt/" in mountpoint:
-                        type_desc = "Removable Media"
-                        is_removable = True
 
                 size_gb = total_bytes / (1024**3)
                 drive_letter = mountpoint.rstrip("\\/")
-
-                if self.is_windows and len(drive_letter) == 2 and drive_letter[1] == ":":
-                    raw_path = f"\\\\.\\{drive_letter}"
-                else:
-                    raw_path = device_path
-
+                raw_path = f"\\\\.\\{drive_letter}" if (self.is_windows and len(drive_letter) == 2 and drive_letter[1] == ":") else p.device
                 disp = f"{drive_letter} [{type_desc}] - {size_gb:.1f} GB ({fstype})"
                 devices.append(DeviceInfo(
                     device_path=raw_path,
@@ -148,22 +161,15 @@ class DeviceManager:
         except Exception:
             pass
 
-        # Sort: Removable physical drives first, then removable volumes, then others
-        def sort_priority(d: DeviceInfo):
-            is_phys = "PHYSICALDRIVE" in d.device_path.upper()
-            if d.is_removable and is_phys:
-                return 0
-            if d.is_removable:
-                return 1
-            if is_phys:
-                return 2
-            return 3
-
-        devices.sort(key=lambda d: (sort_priority(d), d.display_name))
+        devices.sort(key=lambda d: (
+            0 if (d.is_removable and "PHYSICALDRIVE" in d.device_path.upper()) else
+            1 if d.is_removable else
+            2 if "PHYSICALDRIVE" in d.device_path.upper() else 3,
+            d.display_name
+        ))
         return devices
 
     def _get_windows_physical_drives(self) -> List[Dict[str, Any]]:
-        """Queries Win32_DiskDrive to retrieve all attached physical devices."""
         try:
             cmd = [
                 "powershell", "-NoProfile", "-Command",
@@ -173,16 +179,14 @@ class DeviceManager:
             if not out:
                 return []
             data = json.loads(out)
-            if isinstance(data, dict):
-                return [data]
-            if isinstance(data, list):
-                return data
+            return [data] if isinstance(data, dict) else (data if isinstance(data, list) else [])
         except Exception:
-            pass
-        return []
+            return []
 
     def is_admin(self) -> bool:
         """Checks if current process has Windows Administrator privileges."""
+        if aegis_core is not None:
+            return aegis_core.is_admin()
         if not self.is_windows:
             return os.geteuid() == 0 if hasattr(os, "geteuid") else False
         try:
@@ -194,14 +198,18 @@ class DeviceManager:
         """
         STRICT SAFETY ENFORCEMENT:
         Verifies that the output directory is NOT on the drive being recovered.
-        Writing recovered files to the target drive would overwrite deleted file clusters.
         """
+        if aegis_core is not None:
+            try:
+                return aegis_core.is_output_safe(target_device_path, output_dir)
+            except Exception:
+                pass
+
         try:
             out_path = Path(output_dir).resolve()
-            out_root = out_path.anchor.upper()  # e.g., 'E:\\' or 'C:\\'
-
+            out_root = out_path.anchor.upper()
             tgt = target_device_path.upper()
-            # If target is logical volume (e.g. \\.\E:)
+
             if "\\\\.\\" in tgt and "PHYSICALDRIVE" not in tgt:
                 clean_tgt = tgt.replace("\\\\.\\", "").rstrip(":\\")
                 if len(clean_tgt) == 1 and clean_tgt.isalpha():
@@ -213,7 +221,6 @@ class DeviceManager:
                             "Please choose a folder on a different drive (e.g. C: or an external backup disk)."
                         )
 
-            # Check mountpoints against output directory
             for p in psutil.disk_partitions(all=True):
                 p_mount = p.mountpoint.upper()
                 if p_mount and p.device.upper() in tgt:

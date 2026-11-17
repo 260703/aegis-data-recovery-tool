@@ -6,16 +6,17 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-emerald.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-blue.svg)](https://python.org)
+[![Rust Engine](https://img.shields.io/badge/Rust-2021%20Edition-orange.svg)](https://www.rust-lang.org)
 [![Framework](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-green.svg)](https://wiki.qt.io/Qt_for_Python)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
-[![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Safety Protocol](https://img.shields.io/badge/Safety-Strict%20Read--Only-red.svg)](#-strict-read-only-safety-guarantee)
 
 <p align="center">
   <a href="#-key-features">Key Features</a> •
-  <a href="#-how-it-works-under-the-hood">How It Works</a> •
+  <a href="#-architecture">Architecture</a> •
   <a href="#-supported-file-formats">Supported Formats</a> •
-  <a href="#-installation">Installation</a> •
+  <a href="#-installation--setup-guide">Installation & Setup</a> •
+  <a href="#-compiling-the-rust-engine-aegis_core">Compiling Rust Engine</a> •
   <a href="#-usage-guide">Usage Guide</a> •
   <a href="#-contributing">Contributing</a>
 </p>
@@ -26,118 +27,125 @@
 
 ## 📌 Overview
 
-**Aegis Data Recovery** is an open-source, digital forensics desktop application and command-line engine engineered to recover deleted photos, videos, and raw images directly from physical disks, USB flash drives, memory cards, and raw disk images (`.dd`, `.img`, `.raw`, `.bin`).
+**Aegis Data Recovery** is a professional, open-source digital forensics suite engineered to recover deleted photos, videos, and raw camera files directly from physical disks, USB flash drives, memory cards, and raw disk images (`.dd`, `.img`, `.raw`, `.bin`).
 
-Unlike standard consumer data recovery tools that rely on naive header-footer pattern matching (which produce truncated, corrupt, or bloated false-positive files), Aegis implements **deep structural boundary parsing**. It analyzes the internal binary structures, atom trees, IFD tables, and CRC-32 checksums of media files to accurately extract files with zero data corruption.
-
-Aegis provides both a modern **PySide6 desktop GUI** with live metrics and a high-performance **multi-threaded CLI** for automated forensic workflows.
+Unlike standard consumer data recovery tools that rely on naive header-footer pattern matching (which produce truncated, corrupt, or bloated false-positive files), Aegis combines a **compiled Rust systems engine (`aegis_core`)** with a modern **PySide6 desktop GUI**. It analyzes internal binary structures, ISOBMFF atom trees, TIFF IFD tables, and CRC-32 checksums to extract files with zero data corruption.
 
 ---
 
 ## ✨ Key Features
 
-- **🛡️ Strict Read-Only Safety Protocol**: 
-  Target drives are strictly opened in binary read-only mode (`'rb'`). Aegis emulates hardware write-blocking: zero write, partition, or format commands are ever issued to source media.
-- **🚫 Target Collision Prevention**: 
-  Actively validates the recovery destination against the target drive. Prevents saving carved files onto the disk being scanned to protect deleted clusters from being overwritten.
-- **⚡ Deep Structural Carving (No False Positives)**: 
-  Parses true structural boundaries for JPEG (entropy stream & byte stuffing), PNG (chunk-by-chunk CRC-32 validation), MP4/MOV (ISOBMFF atom chains), and RAW photos (TIFF IFD tags and strip/tile offsets).
-- **🔄 Sliding-Window Overlap Buffer**: 
-  Reads disk sectors using an overlapping window mechanism (64 KB sliding margin), guaranteeing that file headers straddling read chunk boundaries are never missed.
-- **🖥️ Modern PySide6 Desktop GUI**: 
-  Dark-themed forensic dashboard with live I/O throughput (MB/s), estimated time remaining (ETA), real-time recovered file stream, search/filter controls, and activity logs.
-- **🧵 Background `QThread` Architecture**: 
-  All disk I/O and carving routines run asynchronously on dedicated background worker threads. The UI never freezes or stutters even under intensive disk I/O.
-- **🔌 Automatic USB Hotplug Detection**: 
-  Background timer dynamically senses when USB drives or external storage devices are connected or removed, updating the drive list seamlessly.
-- **⚡ Standalone Multi-Threaded CLI (`carver.py`)**: 
-  A lean, scriptable command-line tool with multi-threaded worker pools, ideal for headless servers, Linux forensic workstations, or batch image processing.
-- **🔑 Automatic Windows UAC Elevation**: 
-  Automatically detects administrator privileges needed for raw physical drive access (`\\.\PhysicalDriveX`) and triggers a UAC prompt (`runas`). Includes a safe `--no-elevate` mode for disk images.
+- **🦀 High-Performance Native Rust Core (`aegis_core`)**:
+  - **SIMD Byte Searching**: Hardware-accelerated AVX2/AVX-512 signature scanning using `memchr` (`memmem::Finder`).
+  - **Rayon Multi-Core Parallelism**: Dynamic work-stealing parallel parsing across all physical CPU cores.
+  - **Hardware CRC-32 Validation**: Hardware SSE4.2/PCLMULQDQ acceleration via `crc32fast` for chunk verification.
+  - **GIL Release**: Releases the Python Global Interpreter Lock (`Python::allow_threads`) during disk I/O, ensuring the PySide6 UI runs at a buttery 60 FPS without freezing.
+- **🛡️ Strict Read-Only Physical Disk Stream**:
+  - Raw physical drives (`\\.\PhysicalDriveX`) and volumes (`\\.\E:`) are opened in strict binary read-only mode (`GENERIC_READ` / `rb`).
+  - Emulates hardware write-blockers: zero write, erase, or partition commands are ever sent to the source media.
+- **🚫 Physical Disk Overwrite Prevention**:
+  - Compares physical disk numbers via Win32 `IOCTL_STORAGE_GET_DEVICE_NUMBER` to actively prevent selecting an output folder located on the physical disk being recovered.
+- **🔄 Sliding-Window Overlap Buffer**:
+  - Reads disk sectors in chunks with a 64 KB trailing sliding-window overlap margin, ensuring file signatures split across chunk boundaries are never missed.
+- **🎯 Selective File Recovery & Interactive Table**:
+  - **Checkbox Selection**: Every detected file features a clean select box under the **SELECT** column.
+  - **Selective Output Sync**: Only files that are explicitly checked will be saved to your chosen output folder!
+  - **Bulk Selection Controls**: Includes `☑ Select All` and `☐ Deselect All` buttons in the table header.
+  - **Dynamic Save Button**: Prominent `💾 Save Selected (N)` action button that reflects selection count in real time.
+  - **Right-Click Context Menu**: Instant options to *Preview File*, *Toggle Selection*, *Export Single File*, and *Open File Location*.
+- **🖥️ Forensic Dashboard (PySide6)**:
+  - Live I/O throughput (MB/s), peak speed tracking, estimated time remaining (ETA), LBA sector ticker, and integrity detail badges.
+- **🔌 Automatic USB Hotplug Detection**:
+  - Background polling dynamically detects when USB drives are inserted or removed, refreshing the target list automatically.
+- **⚡ Standalone Multi-Threaded CLI (`carver.py`)**:
+  - Scriptable, high-speed CLI tool ideal for automated forensic pipelines, headless servers, or batch processing.
 
 ---
 
-## 🔬 How It Works (Under the Hood)
+## 🏛 Architecture
 
-Aegis operates via a four-stage forensic pipeline:
+Aegis uses a hybrid architecture separating high-speed raw binary parsing from UI orchestration:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 1. TARGET STREAMING (Strict Read-Only Direct I/O)                           │
-│    Direct hardware access (\\.\PhysicalDriveX) or Disk Images (.dd, .img)   │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 2. SLIDING-WINDOW BUFFER & SECTOR ALIGNMENT                                 │
-│    8 MB read blocks with 64 KB overlap buffer to prevent split signatures   │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 3. DEEP STRUCTURAL BOUNDARY PARSING (Zero False-Positives)                  │
-│    • JPEG: Segment traversal, byte stuffing (0xFF00), progressive markers   │
-│    • PNG:  Chunk header validation, full CRC-32 checksums, IEND chunk      │
-│    • MP4:  ISOBMFF ftyp brands, top-level atom chain (moov + mdat pairing)  │
-│    • RAW:  TIFF IFD/SubIFD directory tag walking, strip/tile offset sizing   │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 4. ATOMIC RANGE CLAIMING & SAFE CARVING                                     │
-│    Guarantees no duplicate/overlapping carvings; writes to safe output disk │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                 PySide6 Desktop GUI / CLI                   │
+│          (app.py / main.py / carver.py / ui/)               │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       core/ (Python)                        │
+│  • worker.py          -> PySide6 QThread worker & signals   │
+│  • device_manager.py  -> Drive enumeration & safety checks  │
+│  • disk_stream.py     -> Read-only disk stream fallback     │
+│  • parsers.py         -> Pure Python reference parsers      │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ pyo3 bindings
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      src/ (Rust Crate)                      │
+│                Compiled into: aegis_core.pyd                │
+│  • engine.rs          -> Rayon work-stealing carver         │
+│  • disk_stream.rs     -> Win32 4096-byte direct sector I/O  │
+│  • parsers.rs         -> SIMD JPEG, PNG, ISOBMFF, TIFF RAW  │
+│  • device_manager.rs  -> Win32 physical IOCTL safety check  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 1. Target Streaming & Sector Alignment
-Direct access to raw physical disks on modern operating systems requires sector alignment (typically 512 bytes for legacy MBR/FAT32 or 4096 bytes for Advanced Format / 4Kn drives). The `DiskStream` class automatically aligns seeks and reads to 4096-byte hardware boundaries, with a lock-free in-memory cache to eliminate redundant disk reads.
-
-### 2. Overlap Window Buffering
-When reading continuous raw sectors in chunks (e.g., 8 MB blocks), file headers that fall on the boundary between chunk $N$ and chunk $N+1$ would be split and lost in naive carvers. Aegis retains a 64 KB trailing overlap window across consecutive reads, ensuring 100% boundary detection coverage.
-
-### 3. Structural Boundary Calculation
-Rather than carving a fixed arbitrary size or stopping at the first matching footer:
-- **JPEG (`.jpg`, `.jpeg`)**: Validates `FF D8 FF` Start of Image (SOI). Traverses segment markers (APPn, DQT, SOF, DHT). Upon reaching Start of Scan (`FF DA`), it enters the entropy-coded bitstream, correctly handling byte stuffing (`FF 00`), restart markers (`RST0`–`RST7`), and multi-scan progressive JPEGs until locating the true End of Image (`FF D9`).
-- **PNG (`.png`)**: Validates 8-byte signature (`89 50 4E 47 0D 0A 1A 0A`). Traverses chunks sequentially (`IHDR`, `PLTE`, `IDAT`, etc.), verifies the 32-bit CRC checksum for each chunk against the IEEE 802.3 polynomial, and terminates cleanly at `IEND`.
-- **MP4 / MOV (`.mp4`, `.mov`, `.cr3`)**: Validates the `ftyp` box and major/compatible brand declarations (`isom`, `iso2`, `mp41`, `qt  `, `crx `). Follows 32-bit and 64-bit (`largesize`) box chains, validating top-level containers (`moov`, `mdat`, `free`, `meta`) to calculate total file length.
-- **RAW Photos (`.cr2`, `.nef`, `.arw`, `.dng`)**: Inspects TIFF header endianness (`II*` little-endian or `MM*` big-endian). Traverses Image File Directories (IFD0, SubIFDs, ExifIFD), extracts strip offsets (`0x0111`), strip byte counts (`0x0117`), tile offsets (`0x0144`), and JPEG interchange offsets (`0x0201`), calculating the exact outer envelope of the sensor payload.
-
-### 4. Atomic Range Claiming
-To prevent carving smaller embedded previews (such as JPEG EXIF thumbnails) as independent duplicate files, Aegis maintains an atomic `claimed_ranges` registry. Once a master RAW or JPEG file claims a sector range $[A, B)$, sub-allocations within that range are ignored.
+- **`src/` (Rust Engine)**: The high-performance core compiled via Maturin into `aegis_core`. Handles memory mapping, 4096-byte aligned Win32 direct I/O, SIMD scanning, and Rayon multi-threading.
+- **`core/` (Python Bridge)**: PySide6 `QThread` wrappers (`worker.py`) that convert native engine callbacks into Qt signals (`sig_progress`, `sig_file_found`, `sig_log`) without blocking the event loop. Also provides pure-Python fallbacks.
 
 ---
 
 ## 📁 Supported File Formats
 
-| Format | Extension | Magic Signature | Boundary Verification | Max Size Limit |
+| Format | Extension | Magic Signature | Boundary Verification Logic | Max Carve Limit |
 | :--- | :--- | :--- | :--- | :--- |
-| **JPEG Images** | `.jpg`, `.jpeg` | `FF D8 FF` | Segment marker traversal, byte-stuffing decoding, true `FF D9` EOI | 50 MB |
-| **PNG Images** | `.png` | `89 50 4E 47 0D 0A 1A 0A` | Chunk header parsing, full payload CRC-32 verification, terminal `IEND` | 100 MB |
-| **MP4 Videos** | `.mp4` | `....ftyp(isom\|mp41\|...)` | ISOBMFF atom/box chain traversal (`moov` + `mdat` validation) | 4 GB |
+| **JPEG Images** | `.jpg`, `.jpeg` | `FF D8 FF` | Segment marker traversal, byte-stuffing decoding (`FF 00`), restart markers, true `FF D9` EOI | 50 MB |
+| **PNG Images** | `.png` | `89 50 4E 47 0D 0A 1A 0A` | Chunk header parsing, full payload CRC-32 validation (`crc32fast`), terminal `IEND` | 100 MB |
+| **MP4 Videos** | `.mp4` | `....ftyp(isom\|mp41\|...)` | Top-level atom chain validation (`moov` + `mdat` pairing, 64-bit `largesize`) | 4 GB |
 | **QuickTime Videos** | `.mov` | `....ftypqt  ` or `wide` | QuickTime atom traversal, compatible brand check | 4 GB |
-| **Canon RAW** | `.cr2` | `II*\x00` + `CR\x02\x00` | TIFF IFD directory parsing, SubIFDs (0x014A), sensor strip ranges | 250 MB |
-| **Canon RAW 3** | `.cr3` | `....ftypcrx ` | ISOBMFF atom parser with Canon CRX box mapping | 250 MB |
-| **Nikon RAW** | `.nef` | `II*\x00` (Make: NIKON) | TIFF IFD chain traversal, SubIFD strip byte count matching | 250 MB |
-| **Sony RAW** | `.arw` | `II*\x00` (Make: SONY) | TIFF IFD chain traversal, Sony SubIFD offset calculation | 250 MB |
-| **Adobe Digital Negative** | `.dng` | `II*\x00` (DNGVersion) | TIFF DNG tag 0xC612 verification and payload evaluation | 250 MB |
+| **Canon RAW (CR2)** | `.cr2` | `II*\x00` + `CR\x02\x00` | TIFF IFD directory parsing, SubIFDs (`0x014A`), sensor strip offset pairing | 250 MB |
+| **Canon RAW 3 (CR3)** | `.cr3` | `....ftypcrx ` | ISOBMFF atom parser with Canon CRX box mapping | 250 MB |
+| **Nikon RAW (NEF)** | `.nef` | `II*\x00` (Make: NIKON) | TIFF IFD chain traversal, SubIFD strip byte count matching | 250 MB |
+| **Sony RAW (ARW)** | `.arw` | `II*\x00` (Make: SONY) | TIFF IFD chain traversal, Sony SubIFD offset calculation | 250 MB |
+| **Adobe Digital Negative** | `.dng` | `II*\x00` (DNGVersion) | TIFF DNG tag `0xC612` verification and payload evaluation | 250 MB |
 
 ---
 
-## 📦 Installation
+## 📦 Installation & Setup Guide
 
-### Prerequisites
-- **Python 3.9+** (Compatible with Python 3.9, 3.10, 3.11, 3.12, 3.13, 3.14)
-- **Windows**, **Linux**, or **macOS**
+### 1. Prerequisites
 
-### 1. Clone the Repository
+Before setting up the project, ensure you have the following installed on your system:
+
+1. **Python 3.9+** (Tested on Python 3.9 through 3.14):
+   - [Download Python](https://www.python.org/downloads/) (Make sure to check *"Add Python to PATH"* during installation).
+2. **Rust & Cargo** (2021 Edition or newer):
+   - Install Rust via [rustup.rs](https://rustup.rs/):
+     ```powershell
+     # In PowerShell / Command Prompt:
+     winget install --id Rustlang.Rustup
+     # OR download rustup-init.exe from https://rustup.rs
+     ```
+3. **C++ Build Tools (Windows Users)**:
+   - Visual Studio 2017 or later, or **Build Tools for Visual Studio** with the **"Desktop development with C++"** workload and **Windows 10/11 SDK** selected (required by the MSVC linker `link.exe` and `kernel32.lib`).
+
+---
+
+### 2. Clone the Repository
+
 ```bash
 git clone https://github.com/your-username/aegis-data-recovery.git
 cd aegis-data-recovery
 ```
 
-### 2. Create and Activate a Virtual Environment
+---
+
+### 3. Create a Virtual Environment
+
 ```bash
-# Windows
+# Windows (PowerShell / Command Prompt)
 python -m venv venv
 venv\Scripts\activate
 
@@ -146,162 +154,191 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Install Dependencies
+---
+
+### 4. Install Python Dependencies
+
+For general users who only want to run the application:
 ```bash
 pip install -r requirements.txt
 ```
 
-*(Optional) For contributors and development tools (pytest, black, flake8):*
+For developers and contributors (includes `maturin`, `pytest`, `black`, `flake8`, `mypy`):
 ```bash
 pip install -r requirements-dev.txt
 ```
 
 ---
 
+## 🛠 Compiling the Rust Engine (`aegis_core`)
+
+Aegis requires the compiled Rust extension module `aegis_core` to achieve full hardware carving speeds.
+
+With your virtual environment active, compile and install the crate into your environment using **Maturin**:
+
+```bash
+maturin develop --release
+```
+
+#### What this command does:
+1. Invokes `cargo build --release` with full Link-Time Optimization (`lto = "fat"`) and maximum optimization (`opt-level = 3`).
+2. Generates the native Windows Python extension binary (`aegis_core.pyd`).
+3. Installs the extension directly into your active virtual environment (`venv/Lib/site-packages/`).
+
+#### Verify the Native Build:
+Run this one-liner to verify `aegis_core` is compiled and exposes all native bindings:
+```bash
+python -c "import aegis_core; print('aegis_core loaded successfully! Exports:', [x for x in dir(aegis_core) if not x.startswith('_')])"
+```
+*Expected output:*
+```text
+aegis_core loaded successfully! Exports: ['CarveEngine', 'is_admin', 'is_output_safe', 'list_devices']
+```
+
+---
+
 ## 🚀 Usage Guide
 
-### Mode 1: Modern Desktop GUI Application
+### Mode 1: Desktop GUI Application
 
-#### Running on Windows (Physical Drives & USB Sticks)
-Accessing raw disks (`\\.\PhysicalDriveX`) requires Administrator privileges. Running `app.py` automatically prompts for Windows UAC elevation:
+#### Running with UAC Auto-Elevation (Recommended for Physical Disks)
+Accessing raw physical disks (`\\.\PhysicalDriveX`) requires Windows Administrator privileges. Running `app.py` automatically prompts for Windows UAC elevation:
 ```powershell
 python app.py
 ```
 
-#### Running in Safe User Mode (Disk Images Only)
+#### Running in Safe Mode (Disk Images Only)
 If you only need to analyze `.dd`, `.img`, or `.raw` disk images without triggering Windows UAC elevation:
 ```powershell
 python app.py --no-elevate
+# OR
+python main.py
 ```
 
 #### GUI Workflow:
 1. **Select Recovery Target**: Pick a physical drive, removable USB drive, or load a `.dd` / `.img` file.
-2. **Choose Output Directory**: Select an output folder on a **separate drive** (the safety guard prevents selecting the recovery target).
+2. **Choose Output Directory**: Select an output destination on a **separate drive** (the safety guard prevents selecting the recovery target).
 3. **Select File Formats**: Choose any combination of JPEG, PNG, RAW, MP4, and MOV.
 4. **Choose Sector Alignment**:
-   - `512-Byte Sector`: Standard for FAT32, exFAT, and USB pendrives (fastest).
-   - `4096-Byte Cluster`: Ultra-fast for modern NTFS and 4Kn drives.
-   - `1-Byte Unaligned`: Deep byte-by-byte forensic search across corrupted file systems.
-5. **Start Recovery**: Click `START RECOVERY SCAN`. Monitor live progress, throughput, and carved files in real time.
+   - `512-Byte Sector`: Standard for FAT32, exFAT, and USB flash drives (fastest).
+   - `4096-Byte Cluster`: Optimized for modern NTFS and 4Kn drives.
+   - `1-Byte Unaligned`: Deep forensic search across damaged partitions.
+5. **Start Recovery**: Click `▶ START RECOVERY SCAN`. Watch real-time throughput, ETA, and detected files.
+6. **Selective Saving**:
+   - Check or uncheck files directly in the table using the select boxes under the **SELECT** column.
+   - Use `☑ Select All` or `☐ Deselect All` for fast batch selection.
+   - Click `💾 Save Selected (N)` to save only the files you want to your output directory!
 
 ---
 
 ### Mode 2: Multi-Threaded CLI Carver (`carver.py`)
 
-Aegis includes a standalone, scriptable CLI carver with configurable multi-threading.
+Aegis includes a standalone, scriptable CLI tool:
 
 ```bash
 python carver.py [-h] [-o OUTPUT] [-s SECTOR_STEP] [-b BLOCK_SIZE] [-t THREADS] [-f FORMATS] target
 ```
 
-#### CLI Command-Line Arguments:
-| Argument | Description | Default |
+#### CLI Options:
+| Option | Description | Default |
 | :--- | :--- | :--- |
-| `target` | Path to raw disk image (`.dd`, `.img`) or physical device (`\\.\PhysicalDrive1`, `/dev/sdb`) | *Required* |
+| `target` | Path to raw disk image (`.dd`, `.img`) or physical drive (`\\.\PhysicalDrive1`) | *Required* |
 | `-o`, `--output` | Destination directory for carved files | `Recovered_Data` |
 | `-s`, `--sector-step` | Sector alignment in bytes (`512`, `4096`, or `1` for unaligned) | `512` |
-| `-b`, `--block-size` | Read chunk buffer size in megabytes | `8` (MB) |
-| `-t`, `--threads` | Number of concurrent worker threads | CPU Count |
+| `-b`, `--block-size` | Read chunk buffer size in megabytes | `16` (MB) |
+| `-t`, `--threads` | Number of worker threads | CPU Count |
 | `-f`, `--formats` | Comma-separated list of formats (`jpeg,png,mp4,mov,raw`) | `all` |
 
-#### Practical CLI Examples:
-
+#### Practical Examples:
 ```bash
-# 1. Carve a raw USB disk dump with 8 threads into a custom folder
-python carver.py /path/to/evidence.dd -o ./Carved_Output -t 8
+# Carve a raw USB disk image using 8 threads
+python carver.py evidence.dd -o ./Carved_Output -t 8
 
-# 2. Carve only JPEG and RAW photos from a physical drive on Windows
+# Carve only JPEG and RAW photos from a physical drive on Windows
 python carver.py \\.\PhysicalDrive2 -f jpeg,raw -o D:\Recovered_Photos
 
-# 3. Perform a deep 1-byte unaligned forensic carve on a damaged partition
+# Perform a deep 1-byte unaligned forensic carve on a damaged image
 python carver.py damaged_drive.img -s 1 -f jpeg,png -o ./Forensic_Carve
+```
+
+---
+
+## 🧪 Testing & Verification
+
+### Run Python Automated Unit Tests
+Aegis includes an extensive test suite verifying structural parsers, disk stream caching, and device safety mechanisms:
+```bash
+python -m unittest discover tests -v
+```
+
+### Run Rust Static Analysis & Syntax Checks
+Verify the native Rust engine compiles with zero warnings or errors:
+```bash
+cargo check
 ```
 
 ---
 
 ## 🔒 Strict Read-Only Safety Guarantee
 
-In forensic investigations and emergency data recovery, **preventing secondary damage to target media is paramount**:
+In forensic investigations and emergency recovery, **preventing secondary damage to target media is paramount**:
 
-1. **Hardware Write-Block Emulation**: Target handles are opened exclusively in binary read-only mode (`mode='rb'`). The underlying engine contains zero write, erase, truncate, or format routines.
-2. **Target Collision Prevention**: Aegis actively validates drive letters and volume mount points. If a user attempts to select an output directory located on the drive being recovered, Aegis blocks the scan to prevent overwriting unallocated clusters.
+1. **Hardware Write-Block Emulation**: Target device handles are opened exclusively in read-only mode (`GENERIC_READ` / `rb`). The underlying engine contains zero write, erase, truncate, or format routines.
+2. **Physical Disk Overwrite Guard**: Aegis checks physical drive identifiers via `IOCTL_STORAGE_GET_DEVICE_NUMBER`. If an output directory resides on the physical disk being carved, the scan is blocked immediately to prevent overwriting unallocated clusters.
 
 ---
 
 ## 📂 Project Structure
 
-```
+```text
 aegis-data-recovery/
-├── .github/
-│   ├── ISSUE_TEMPLATE/
-│   │   ├── bug_report.md        # GitHub bug report template
-│   │   └── feature_request.md   # GitHub feature request template
-│   ├── PULL_REQUEST_TEMPLATE.md # GitHub pull request template
-│   └── workflows/
-│       └── ci.yml               # Multi-OS automated test pipeline
-├── core/
+├── src/                         # High-Performance Rust Systems Engine (aegis_core)
+│   ├── lib.rs                   # PyO3 module interface & bindings
+│   ├── engine.rs                # Rayon multi-threaded sliding-window carving engine
+│   ├── disk_stream.rs           # 4096-byte sector-aligned Win32 direct I/O
+│   ├── parsers.rs               # SIMD zero-copy structural boundary parsers
+│   └── device_manager.rs        # Win32 physical drive enumeration & IOCTL safety
+├── core/                        # Python Application Core & Qt Signal Bridges
 │   ├── __init__.py              # Core package exports
-│   ├── device_manager.py        # USB / removable drive detection & safety validation
-│   ├── disk_stream.py           # Strictly read-only binary stream handler ('rb')
-│   ├── parsers.py               # Deep structural boundary carving parsers
-│   └── worker.py                # Dedicated background QThread scanner worker
-├── ui/
+│   ├── device_manager.py        # Python drive detection & safety validation
+│   ├── disk_stream.py           # Pure-Python read-only stream fallback
+│   ├── parsers.py               # Pure-Python structural parser fallback
+│   └── worker.py                # Dedicated PySide6 QThread worker
+├── ui/                          # PySide6 Desktop GUI
 │   ├── __init__.py              # UI package exports
-│   ├── icons/
-│   │   └── check.svg            # Custom SVG checkmark icon
-│   ├── main_window.py           # Main PySide6 desktop GUI window
+│   ├── main_window.py           # Main GUI window with interactive table & metrics
 │   └── styles.py                # Modern dark-theme stylesheet (QSS)
-├── tests/
-│   ├── __init__.py              # Test suite package
-│   ├── test_device_manager.py   # Unit tests for hardware enumeration & safety
-│   ├── test_disk_stream.py      # Unit tests for read-only streaming & cache
+├── tests/                       # Automated Forensic Test Suite
+│   ├── __init__.py              # Test suite initialization
+│   ├── test_device_manager.py   # Unit tests for drive detection & safety
+│   ├── test_disk_stream.py      # Unit tests for stream alignment & RAM caching
 │   └── test_parsers.py          # Unit tests for JPEG, PNG, ISOBMFF boundary calculation
-├── .gitignore                   # Comprehensive git ignore rules
-├── app.py                       # Desktop application entry point with UAC auto-elevation
+├── aegis.ico                    # Official application logo & taskbar icon
+├── aegis_core.pyi               # Type stub definitions for IDE autocomplete
+├── app.py                       # Main GUI entry point with Windows UAC auto-elevation
+├── main.py                      # Lightweight direct GUI entry point
 ├── carver.py                    # Standalone multi-threaded CLI carver utility
-├── CONTRIBUTING.md              # Contributor guide & developer documentation
+├── Cargo.toml                   # Rust crate configuration & dependencies
+├── pyproject.toml               # Python build configuration for Maturin / PyO3
+├── requirements.txt             # End-user runtime dependencies (PySide6, psutil)
+├── requirements-dev.txt         # Contributor & compiler dependencies (maturin, pytest, etc.)
+├── .gitignore                   # Git ignore rules for Rust & Python artifacts
+├── CONTRIBUTING.md              # Contributor guidelines
 ├── LICENSE                      # MIT Open Source License
-├── README.md                    # Project documentation
-├── requirements.txt             # Core runtime dependencies
-└── requirements-dev.txt         # Contributor & testing dependencies
-```
-
----
-
-## 🧪 Running Automated Unit Tests
-
-Aegis includes an automated unit test suite verifying structural parsers, disk stream caching, and safety mechanisms.
-
-Run the test suite using Python's built-in `unittest` runner:
-```bash
-python -m unittest discover tests -v
-```
-
-Or using `pytest`:
-```bash
-pytest -v
+└── README.md                    # Project documentation
 ```
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are warmly welcome! Whether you are interested in adding new file format parsers (e.g., PDF, ZIP, WebP, audio files), optimizing carving algorithms, or improving UI translations:
+Contributions are warmly welcome! Whether you are interested in adding new file format parsers (e.g. PDF, ZIP, WebP, audio files), optimizing carving algorithms, or improving UI translations:
 
-1. Check out our **[Contributing Guidelines (CONTRIBUTING.md)](CONTRIBUTING.md)** for developer setup and coding standards.
+1. Review our **[Contributing Guidelines (CONTRIBUTING.md)](CONTRIBUTING.md)**.
 2. Fork the repository and create a feature branch (`git checkout -b feature/new-parser`).
 3. Commit your changes with descriptive messages (`git commit -m "feat(parsers): add WebP RIFF parser"`).
-4. Run `python -m unittest discover tests` to ensure all tests pass.
+4. Run `python -m unittest discover tests` and `cargo check` to ensure all tests pass.
 5. Open a Pull Request!
-
----
-
-## 🗺️ Roadmap
-
-- [ ] **Additional Format Parsers**: PDF, ZIP / DOCX / XLSX, WebP, RIFF AVI, MP3 / AAC.
-- [ ] **Filesystem Metadata Carving**: Complement unallocated sector carving with NTFS `$MFT` and FAT/exFAT Directory Entry parsing to recover original filenames and directory trees.
-- [ ] **GPU-Accelerated Signature Scanning**: OpenCL/CUDA acceleration for multi-gigabyte-per-second signature matching.
-- [ ] **Disk Imaging / Cloning Utility**: Forensic bit-stream image creation (`dd` image creation with SHA-256 hash validation).
 
 ---
 

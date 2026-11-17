@@ -1,13 +1,25 @@
+# =============================================================================
+# Aegis Data Recovery - Git Ignore Rules
+# =============================================================================
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyd
 
-# C extensions
+# C / Rust compiled extension binaries
 *.so
+*.dylib
+*.dll
+*.pdb
+*.exp
+*.lib
 
-# Distribution / packaging
+# Rust / Cargo artifacts
+target/
+
+# Distribution & packaging
 build/
 develop-eggs/
 dist/
@@ -24,6 +36,7 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.whl
 
 # Virtual Environments
 venv/
@@ -33,6 +46,8 @@ env/
 ENV/
 env.bak/
 venv.bak/
+myenv/
+myenv*/
 
 # Testing & Coverage
 .pytest_cache/
@@ -68,9 +83,11 @@ Thumbs.db
 desktop.ini
 $RECYCLE.BIN/
 
-# Data Recovery & Carved Artifacts (Protect User Privacy)
+# Data Recovery Staging & Carved Artifacts (Protect User Privacy)
 Recovered_Data/
 Aegis_Recovered_Data/
+Output/
+.aegis_staging/
 *.dd
 *.img
 *.raw
@@ -86,3 +103,7 @@ Aegis_Recovered_Data/
 logs/
 Logs/
 
+# Installer & Build Tools
+InstallerOutput/
+AegisRecovery.spec
+setup.iss

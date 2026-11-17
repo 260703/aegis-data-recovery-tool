@@ -21,6 +21,11 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+try:
+    import aegis_core
+except ImportError:
+    aegis_core = None
+
 from core.disk_stream import DiskStream
 from core.parsers import (
     CarveCandidate,
@@ -377,6 +382,67 @@ def main():
 
     args = parser.parse_args()
     enabled = [fmt.strip().lower() for fmt in args.formats.split(",") if fmt.strip()]
+
+    if aegis_core is not None:
+        print("=" * 70)
+        print("   AEGIS CORE - NATIVE RUST PARALLEL DISK CARVER (RAYON / AVX2)")
+        print("=" * 70)
+        print(f"[*] Target       : {args.target}")
+        print(f"[*] Output Dir   : {Path(args.output).resolve()}")
+        print(f"[*] Sector Step  : {args.sector_step} bytes")
+        print(f"[*] Formats      : {', '.join(enabled)}")
+        print("=" * 70)
+
+        engine = aegis_core.CarveEngine(
+            args.target,
+            args.output,
+            args.sector_step,
+            args.block_size,
+            enabled
+        )
+
+        def on_started(total_bytes: int):
+            print(f"[*] Stream initialized: {total_bytes / (1024**3):.2f} GB ({total_bytes:,} bytes)")
+
+        def on_progress(scanned: int, total: int, speed: float, eta: float, found: int):
+            pct = (scanned / total * 100.0) if total > 0 else 0.0
+            tot_gb = total / (1024**3) if total > 0 else 0.0
+            eta_m = int(eta // 60)
+            eta_s = int(eta % 60)
+            sys.stdout.write(
+                f"\r[{pct:5.1f}%] {scanned / (1024**3):6.2f}/{tot_gb:.2f} GB "
+                f"| {speed:5.1f} MB/s | ETA: {eta_m:02d}:{eta_s:02d} | Recovered: {found} files"
+            )
+            sys.stdout.flush()
+
+        def on_file_found(meta: dict):
+            pass
+
+        def on_log(msg: str, level: str):
+            if level == "error":
+                print(f"\n[!] {msg}", file=sys.stderr)
+            elif level == "success" and "Recovered" in msg:
+                print(f"\n[+] {msg}")
+
+        try:
+            stats = engine.start(on_started, on_progress, on_file_found, on_log)
+            elapsed = stats.get("elapsed_time", 0.0)
+            found_map = stats.get("found", {})
+            total_found = sum(found_map.values())
+            print("\n\n" + "=" * 70)
+            print("                   CARVING TASK COMPLETED")
+            print("=" * 70)
+            print(f"[*] Elapsed Time     : {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)")
+            print(f"[*] Total Scanned    : {stats.get('scanned_bytes', 0) / (1024**3):.2f} GB")
+            print(f"[*] Files Recovered  : {total_found}")
+            for k, v in found_map.items():
+                print(f"    - {k.upper():14} : {v}")
+            print(f"[*] Output Directory : {Path(args.output).resolve()}")
+            print("=" * 70 + "\n")
+        except KeyboardInterrupt:
+            engine.stop()
+            print("\n[!] Carving interrupted by user. Partial files safely retained.")
+        sys.exit(0)
 
     carver = FileCarver(
         target=args.target,
